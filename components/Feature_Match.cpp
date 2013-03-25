@@ -17,12 +17,14 @@ vector<IplImage*> imageList;		// the IplImage* of each image
 unsigned itimes = 5;				
 unsigned nImgs = 0;					// number of images
 const unsigned nMaxCorners = 8000;	// maximum number of corners
+unsigned win_size = 64;
 unsigned nDescriptors = 128;
 map<pair<string, string>, vector<pair<int, int> > > pair_matches;  // the data structure to map the image pair to the feature matches
 //CvPoint2D32f **corners = 0;			// several arrays to hold corners of each image
 //int *countArr = 0;					// hold the actual count of corners of each image
 vector<vector<CvPoint2D32f> > corners;
 vector<int> countArr;
+vector<int> prevCount;
 
 bool operator ==(const CvPoint2D32f& lhs, const CvPoint2D32f& rhs)
 {
@@ -70,19 +72,23 @@ void findGoodFeatures()
 	// for each image, we find the good features of it using corners	
 	IplImage* tmpImage;
 	IplImage* tmpImage2;
-	/*
+	
 	for(int i = 0; i < imageList.size(); i++)
 	{
 		tmpImage = cvCreateImage(cvGetSize(imageList[i]), IPL_DEPTH_32F, 1);
 		tmpImage2 = cvCreateImage(cvGetSize(imageList[i]), IPL_DEPTH_32F, 1);
 		cvGoodFeaturesToTrack(imageList[i], tmpImage, tmpImage2, &corners[i][0], &countArr[i], 0.01, 5);
-		cout << nameList[i] << " has found " << countArr[i] << " corners." << endl;
-	}
-	*/
-	tmpImage = cvCreateImage(cvGetSize(imageList[0]), IPL_DEPTH_32F, 1);
-	tmpImage2 = cvCreateImage(cvGetSize(imageList[0]), IPL_DEPTH_32F, 1);
-	cvGoodFeaturesToTrack(imageList[0], tmpImage, tmpImage2, &corners[0][0], &countArr[0], 0.01, 5);
-	cout << nameList[0] << " has found " << countArr[0] << " corners." << endl;
+		corners[i].resize(countArr[i]);
+		/*
+		cvFindCornerSubPix(imageList[i], &corners[i][0], countArr[i], cvSize(win_size, win_size), cvSize(-1, -1),
+			cvTermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.03));
+			*/
+		cout << nameList[i] << " has found " << countArr[i] << " initial corners." << endl;
+	}	
+	//tmpImage = cvCreateImage(cvGetSize(imageList[0]), IPL_DEPTH_32F, 1);
+	//tmpImage2 = cvCreateImage(cvGetSize(imageList[0]), IPL_DEPTH_32F, 1);
+	//cvGoodFeaturesToTrack(imageList[0], tmpImage, tmpImage2, &corners[0][0], &countArr[0], 0.01, 5);
+	//cout << nameList[0] << " has found " << countArr[0] << " corners." << endl;
 	cvReleaseImage(&tmpImage);
 	cvReleaseImage(&tmpImage2);
 }
@@ -90,23 +96,52 @@ void findGoodFeatures()
 void conductMatching()
 {
 	// for image i, sequence j,j+1....count-1 will try to match it and generate the pair-matches map
-	char *status = new char[nMaxCorners];	
+	int iHalf = nameList.size() / 2;
+	char *status = new char[nMaxCorners];
+	float *errors = new float[nMaxCorners];
+	for(int i = 0; i < nImgs; i++)
+		prevCount.push_back(0);
 	for(int i = 0; i < nImgs - 1; i++)
 	{
-		cout << "Matching " << nameList[i] << " and " << nameList[i + 1] << "..." << endl;
-		// use PyrLK to find matches.
-		cvCalcOpticalFlowPyrLK(imageList[i], imageList[i + 1], NULL, NULL, &corners[i][0], &corners[i + 1][0], nMaxCorners,
-			cvSize(64,64), itimes, status, NULL, cvTermCriteria(CV_TERMCRIT_ITER, 5, 0.1), 0);
-		vector<pair<int, int> > vec;
-		for(int j = 0; j < countArr[i]; j++)
+		for(int j = i + 1; j < nImgs; j++)
 		{
-			if(status[j] == 1)
+			if(prevCount[i] < iHalf)
+				prevCount[i] ++;
+			else
+				prevCount[j] ++;
+			cout << "Matching " << nameList[i] << " and " << nameList[j] << "..." << endl;
+			vector<pair<int, int> > vec;
+			CvPoint2D32f *dest_corners = new CvPoint2D32f[nMaxCorners];
+			int prev, next;
+			// determine whether to add features in image i or image j, according to their appearance count of precedings
+			if(prevCount[j] == 0)
 			{
-				vec.push_back(pair<int, int>(j, j));
+				prev = i; 
+				next = j;				
 			}
+			else
+			{
+				prev = j;
+				next = i;
+			}
+			cvCalcOpticalFlowPyrLK(imageList[prev], imageList[next], NULL, NULL, &corners[prev][0], dest_corners, countArr[prev],
+				cvSize(win_size, win_size), itimes, status, errors, cvTermCriteria(CV_TERMCRIT_ITER, 5, 0.1), 0);
+			for(int k = 0; k < countArr[prev]; k++)
+			{
+				if(status[k] == 1 && errors[k] <= 550)
+				{						
+					vec.push_back(pair<int, int>(k, corners[next].size()));
+					corners[next].push_back(dest_corners[k]);
+				}
+			}	
+			pair_matches[pair<string, string>(nameList[i], nameList[j])] = vec; 		
 		}
-		pair_matches[pair<string, string>(nameList[i], nameList[i + 1])] = vec; 
+		
+		// use PyrLK to find matches.
+		
 	}
+	delete [] status;
+	delete [] errors;
 	/*
 	for(int i = 0; i < nImgs; i++)
 	{
@@ -138,7 +173,6 @@ void conductMatching()
 		}
 	}
 	*/
-	delete [] status;
 	//delete [] dest_corners;
 }
 
@@ -149,8 +183,8 @@ void writeToFeatureFiles()
 	{
 		cout << genSiftName(nameList[i]) << "..."<< endl;
 		fstream ofs(genSiftName(nameList[i]), ios_base::out);
-		ofs << countArr[0] << " " << nDescriptors << endl;
-		for(int j = 0; j < countArr[0]; j++)
+		ofs << corners[i].size() << " " << nDescriptors << endl;
+		for(int j = 0; j < corners[i].size(); j++)
 		{
 			ofs << corners[i][j].x << " " << corners[i][j].y << " " << 1.0 << " " << 1.0 << endl;
 			for(int k = 0; k< nDescriptors; k++)
