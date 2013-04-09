@@ -1,5 +1,0 @@
-Fontconfig warning: "/etc/fonts/conf.d/50-user.conf", line 9: reading configurations from ~/.fonts.conf is deprecated.
-
-** (gitg:6115): WARNING **: avatar_cache_open_cb: Timeout was reached
-
-** (gitg:6115): WARNING **: avatar_cache_open_cb: Timeout was reached
